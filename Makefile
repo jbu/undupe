@@ -1,7 +1,7 @@
 include $(GOROOT)/src/Make.inc
 
-TARG=mprof
+TARG=undupe
 GOFILES=\
-	mprof.go\
+	undupe.go\
 
 include $(GOROOT)/src/Make.pkg
