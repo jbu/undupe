@@ -2,13 +2,10 @@ package main
 
 import (
 	"fmt"
-	"time"
 	"os"
 	"path/filepath"
 	"crypto/md5"
 	"runtime"
-	"runtime/pprof"
-	"log"
 	"flag"
 	"bufio"
 )
@@ -18,121 +15,91 @@ type fileHash struct {
 }
 
 type vis struct {
-	c chan fileHash
-	running int
-	visitedAll bool
+	req, resp chan *fileHash
+	quits chan bool
 }
 
 func (v *vis) VisitDir(path string, f *os.FileInfo) bool {
 	return true
 }
 
-func doHash2(path string) (hString string) {
+func HashWorker(req <-chan *fileHash, resp chan<- *fileHash, quits chan<- bool) {
 	h := md5.New() // h is a hash.
-	fd, er := os.Open(path) 
-	defer fd.Close()
-	if er == nil {
-		r := bufio.NewReader(fd)
-		buf := make([]byte, 1024000)
-		 _,ok := r.Read(buf)
-		for ok == nil {
-			h.Write(buf)
-			_,ok = r.Read(buf)
+	buf := make([]byte, 1024000)
+	for r := range req {
+		fmt.Println("<-req ",r.path)
+		fd, er := os.Open(r.path) 
+		if er == nil {
+			r := bufio.NewReader(fd)
+		 	_,ok := r.Read(buf)
+			for ok == nil {
+				h.Write(buf)
+				_,ok = r.Read(buf)
+			}
 		}
+		fd.Close()
+		r.hash = fmt.Sprintf("%x", h.Sum())
+		resp <- r
+		h.Reset()
 	}
-	hString = fmt.Sprintf("%x", h.Sum())
-	return
-}
-
-func doHash(path string, v* vis) {
-	v.running++
-	hString := doHash2(path)
-	v.c <- fileHash{path, hString}
-	v.running--
-	if v.visitedAll && (v.running == 0) {
-		close(v.c)
-	}
+	quits <- true
 }
 
 func (v *vis) VisitFile(path string, f *os.FileInfo) {
-	fmt.Print(v.running, " ")
-	go doHash(path, v) 
+//	fmt.Println(".",path)
+	//fmt.Print(".")
+	v.req <- &fileHash{path:path}
 }
 
-func NewVis() *vis {
+func NewVis(path string, nworkers int) *vis {
 	v := vis{}
-	v.c = make(chan fileHash)
-	v.visitedAll = false
-	return &v
-}
-
-
-func doWalk(path string, v *vis) <-chan bool {
-	e := make(chan bool)
+	v.req = make(chan *fileHash, 5)
+	v.resp = make(chan *fileHash, 5)
+	v.quits = make(chan bool)
+	for i := 0 ; i < nworkers ; i++ {
+		fmt.Println("starting workers: ", i)
+		go HashWorker(v.req, v.resp, v.quits)
+	}
 	go func () {
-		filepath.Walk(path, v, nil)
-		v.visitedAll = true
-		e <- true
+		filepath.Walk(path, &v, nil)
+		close(v.req)
 	}()
-	return e
+	go func () {
+		i := nworkers
+		for _ = range v.quits {
+			i--
+			if i == 0 {
+				close(v.quits)
+				close(v.resp)
+			}
+		}
+	}()
+	return &v
 }
 
 func main() {
 	runtime.GOMAXPROCS(2)
-	var cpuprofile = flag.String("cpuprof", "", "write cpu profile to file")
-	var memprofile = flag.String("memprof", "", "write memory profile to this file")
+	var nthreads = flag.Int("nthreads", 2, "number of threads")
+	var nworkers = flag.Int("nworkers", 0, "number of workers")
 	flag.Parse()
 
-	if *cpuprofile != "" {
-		f, err := os.Create(*cpuprofile)
-		if err != nil {
-	    		log.Fatal(err)
-		}
-		pprof.StartCPUProfile(f)
-		defer pprof.StopCPUProfile()
-    	}
-	if *memprofile != "" {
-		s:=fmt.Sprintf("%s/start.mprof",*memprofile)
-		f, _ := os.Create(s)
-		pprof.WriteHeapProfile(f)
-		f.Close()
-		go func() {
-			i := 0
-			for {
-				s:=fmt.Sprintf("%s/%d.mprof",*memprofile,i)
-				f, _ := os.Create(s)
-				pprof.WriteHeapProfile(f)
-				f.Close()
-				i++
-				time.Sleep(10e7)
-			}
-		}()
-	}
+	if *nworkers == 0 {nworkers = nthreads}
+
 	path := flag.Arg(0)
-	v := NewVis()
+	v := NewVis(path, *nworkers)
+
+
 	m := make(map[string] []string)
-	e := doWalk(path, v)
-	colchan := make(chan bool)
-	go func () {
-		for fh := range v.c {
-			fmt.Println("consuming ", fh.path)
-			if _, ok := m[fh.hash]; ok {
-				m[fh.hash] = append(m[fh.hash], fh.path)
-			} else {
-				m[fh.hash] = []string{fh.path}
-			}
+
+	for fh := range v.resp {
+		if _, ok := m[fh.hash]; ok {
+			m[fh.hash] = append(m[fh.hash], fh.path)
+		} else {
+			m[fh.hash] = []string{fh.path}
 		}
-		colchan <- true
-	}()
-	<-e
-	<-colchan
-	fmt.Println("---")
-	if *memprofile != "" {
-		s:=fmt.Sprintf("%s/preend.mprof",*memprofile)
-		f, _ := os.Create(s)
-		pprof.WriteHeapProfile(f)
-		f.Close()
 	}
+
+	fmt.Println("---")
 	for key, val := range(m) {
 		if len(val) > 1 {
 			fmt.Println(key)
@@ -140,12 +107,6 @@ func main() {
 				fmt.Println("\t",val[i])
 			}
 		}
-	}
-	if *memprofile != "" {
-		s:=fmt.Sprintf("%s/end.mprof",*memprofile)
-		f, _ := os.Create(s)
-		pprof.WriteHeapProfile(f)
-		f.Close()
 	}
 }
 
