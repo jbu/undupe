@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"flag"
 	"bufio"
+	"hash"
 )
 
 type fileHash struct {
@@ -23,22 +24,42 @@ func (v *vis) VisitDir(path string, f *os.FileInfo) bool {
 	return true
 }
 
+const buflen = 1024000
+
+func doHashTick(w *hash.Hash, bufs *[2][buflen]byte, ticks <-chan int) {
+	for idx := range(ticks) {
+		//fmt.Printf("hbuf %v\n",bufs[idx])
+		//fmt.Print(".")
+		(*w).Write(bufs[idx][:])
+	}
+}
+
 func HashWorker(req <-chan *fileHash, resp chan<- *fileHash, quits chan<- bool) {
 	h := md5.New() // h is a hash.
-	buf := make([]byte, 1024000)
+	var bufs [2][buflen]byte
+	//b := &buf
+	idx := 0
 	for r := range req {
-		fmt.Println("<-req ",r.path)
+		//fmt.Println("<-req ",r.path)
+		fmt.Print(",")
 		fd, er := os.Open(r.path) 
+		ticks := make(chan int)
+		go doHashTick(&h, &bufs, ticks)
 		if er == nil {
 			r := bufio.NewReader(fd)
-		 	_,ok := r.Read(buf)
+		 	_,ok := r.Read(bufs[idx][:])
 			for ok == nil {
-				h.Write(buf)
-				_,ok = r.Read(buf)
+				//fmt.Printf("buf %v, idx %v\n",bufs, idx)
+				//h.Write(bufs[idx][:])
+				ticks <- idx
+				if idx == 0 {idx = 1} else {idx = 0}
+				_,ok = r.Read(bufs[idx][:])
 			}
 		}
+		close(ticks)
 		fd.Close()
 		r.hash = fmt.Sprintf("%x", h.Sum())
+		fmt.Println(*r)
 		resp <- r
 		h.Reset()
 	}
