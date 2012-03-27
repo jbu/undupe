@@ -40,8 +40,8 @@ func HashWorker(req <-chan *fileHash, resp chan<- *fileHash, quits chan<- bool) 
 	//b := &buf
 	idx := 0
 	for r := range req {
-		//fmt.Println("<-req ",r.path)
-		fmt.Print(",")
+		fmt.Println("<-req ",r.path)
+		//fmt.Print(".")
 		fd, er := os.Open(r.path) 
 		ticks := make(chan int)
 		go doHashTick(&h, &bufs, ticks)
@@ -59,7 +59,7 @@ func HashWorker(req <-chan *fileHash, resp chan<- *fileHash, quits chan<- bool) 
 		close(ticks)
 		fd.Close()
 		r.hash = fmt.Sprintf("%x", h.Sum())
-		fmt.Println(*r)
+		//fmt.Println(*r)
 		resp <- r
 		h.Reset()
 	}
