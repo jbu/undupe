@@ -41,19 +41,23 @@ func HashWorker(req <-chan *fileHash, resp chan<- *fileHash, quits chan<- bool) 
 	idx := 0
 	for r := range req {
 		fmt.Println("<-req ",r.path)
+		ln := 0
 		//fmt.Print(".")
 		fd, er := os.Open(r.path) 
 		ticks := make(chan int)
 		go doHashTick(&h, &bufs, ticks)
 		if er == nil {
 			r := bufio.NewReader(fd)
-		 	_,ok := r.Read(bufs[idx][:])
+		 	l,ok := r.Read(bufs[idx][:])
+			ln += l
 			for ok == nil {
 				//fmt.Printf("buf %v, idx %v\n",bufs, idx)
 				//h.Write(bufs[idx][:])
 				ticks <- idx
 				if idx == 0 {idx = 1} else {idx = 0}
-				_,ok = r.Read(bufs[idx][:])
+				l,ok = r.Read(bufs[idx][:])
+				ln += l
+				if ln >= 2048000 {break}
 			}
 		}
 		close(ticks)
