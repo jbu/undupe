@@ -7,99 +7,62 @@ import (
 	"crypto/md5"
 	"runtime"
 	"flag"
-	"bufio"
-	"hash"
+//	"bufio"
+//	"hash"
 )
+
+const buflen = 1<<16
 
 type fileHash struct {
 	path, hash string
+	sample []byte
 }
 
 type vis struct {
-	req, resp chan *fileHash
-	quits chan bool
+	paths chan string
 }
 
 func (v *vis) VisitDir(path string, f *os.FileInfo) bool {
 	return true
 }
 
-const buflen = 1024000
-
-func doHashTick(w *hash.Hash, bufs *[2][buflen]byte, ticks <-chan int) {
-	for idx := range(ticks) {
-		//fmt.Printf("hbuf %v\n",bufs[idx])
-		//fmt.Print(".")
-		(*w).Write(bufs[idx][:])
+func ReadWorker(walkOut <-chan string, readOut chan<- *fileHash, readQuits chan<- bool) {
+	for s := range walkOut {
+		fd,_ := os.Open(s) 
+		//r := bufio.NewReader(fd)
+		f := fileHash{path: s, sample:make([]byte, buflen)}
+		fd.Read(f.sample)
+		fmt.Printf("read %s\n",s)
+		fd.Close()
+		readOut <- &f
 	}
+	readQuits <- true
 }
 
-func HashWorker(req <-chan *fileHash, resp chan<- *fileHash, quits chan<- bool) {
+func HashWorker(readOut <-chan *fileHash, hashOut chan<- *fileHash, hashQuits chan<- bool) {
 	h := md5.New() // h is a hash.
-	var bufs [2][buflen]byte
-	//b := &buf
-	idx := 0
-	for r := range req {
-		fmt.Println("<-req ",r.path)
-		ln := 0
-		//fmt.Print(".")
-		fd, er := os.Open(r.path) 
-		ticks := make(chan int)
-		go doHashTick(&h, &bufs, ticks)
-		if er == nil {
-			r := bufio.NewReader(fd)
-		 	l,ok := r.Read(bufs[idx][:])
-			ln += l
-			for ok == nil {
-				//fmt.Printf("buf %v, idx %v\n",bufs, idx)
-				//h.Write(bufs[idx][:])
-				ticks <- idx
-				if idx == 0 {idx = 1} else {idx = 0}
-				l,ok = r.Read(bufs[idx][:])
-				ln += l
-				if ln >= 2048000 {break}
-			}
-		}
-		close(ticks)
-		fd.Close()
+	for r := range readOut {
+		//fmt.Println("hash ",r.path)
+		h.Write(r.sample)
+		r.sample = nil //save space
 		r.hash = fmt.Sprintf("%x", h.Sum())
-		//fmt.Println(*r)
-		resp <- r
+		hashOut <- r
 		h.Reset()
 	}
-	quits <- true
+	hashQuits <- true
 }
 
 func (v *vis) VisitFile(path string, f *os.FileInfo) {
-//	fmt.Println(".",path)
-	//fmt.Print(".")
-	v.req <- &fileHash{path:path}
+	v.paths <- path
 }
 
-func NewVis(path string, nworkers int) *vis {
-	v := vis{}
-	v.req = make(chan *fileHash, 5)
-	v.resp = make(chan *fileHash, 5)
-	v.quits = make(chan bool)
-	for i := 0 ; i < nworkers ; i++ {
-		fmt.Println("starting workers: ", i)
-		go HashWorker(v.req, v.resp, v.quits)
-	}
+func AsyncWalk(path string) (<-chan string) {
+	v := vis{paths: make(chan string)}
 	go func () {
 		filepath.Walk(path, &v, nil)
-		close(v.req)
+		close(v.paths)
 	}()
-	go func () {
-		i := nworkers
-		for _ = range v.quits {
-			i--
-			if i == 0 {
-				close(v.quits)
-				close(v.resp)
-			}
-		}
-	}()
-	return &v
+	return v.paths
 }
 
 func main() {
@@ -111,12 +74,44 @@ func main() {
 	if *nworkers == 0 {nworkers = nthreads}
 
 	path := flag.Arg(0)
-	v := NewVis(path, *nworkers)
+	walkOut := AsyncWalk(path)
+	readOut := make(chan *fileHash)
+	hashOut := make(chan *fileHash)
+	readQuits := make(chan bool)
+	hashQuits := make(chan bool)
+
+	for i := 0; i <= *nworkers; i++ {
+		go ReadWorker(walkOut, readOut, readQuits)
+	}
+	go func() {
+		q := *nworkers
+		for _ = range readQuits {
+			if q == 0 {
+				close(readOut)
+				close(readQuits)
+			}
+			q--
+		}
+	}()
+
+	for i := 0; i <= *nworkers; i++ {
+		go HashWorker(readOut, hashOut, hashQuits)
+	}
+	go func() {
+		q := *nworkers
+		for _ = range hashQuits {
+			if q == 0 {
+				close(hashOut)
+				close(hashQuits)
+			}
+			q--
+		}
+	}()
 
 
 	m := make(map[string] []string)
 
-	for fh := range v.resp {
+	for fh := range hashOut {
 		if _, ok := m[fh.hash]; ok {
 			m[fh.hash] = append(m[fh.hash], fh.path)
 		} else {
