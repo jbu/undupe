@@ -23,15 +23,17 @@ type fileHash struct {
 func ReadWorker(walkOut <-chan string, readOut chan<- *fileHash, readQuits chan<- bool) {
 	for s := range walkOut {
 		fd, er := os.Open(s)
+		fi, _ := fd.Stat()
+		flen := fi.Size()
 		if er != nil {
-			fmt.Println("===", er)
+			fmt.Println("=1=", er)
 		}
 		//r := bufio.NewReader(fd)
 		f := fileHash{path: s, sample: make([]byte, buflen)}
-		_, er = fd.Read(f.sample)
+		_, er2 := fd.Read(f.sample)
 		//fmt.Printf("read %s\n",s)
-		if er != nil {
-			fmt.Println("===", er)
+		if er2 != nil && flen != 0{
+			fmt.Printf("=2= %d, %d, %v, %s\n", flen, len(f.sample), er2, s)
 		}
 		fd.Close()
 		readOut <- &f
@@ -67,7 +69,7 @@ func AsyncWalk(path string) <-chan string {
 	go func() {
     		err := filepath.Walk(path, f)
         	if err != nil {
-            		fmt.Println("=== ",err)
+            		fmt.Println("=3= ",err)
         	}
 		close(p)
 	}()
