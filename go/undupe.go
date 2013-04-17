@@ -78,8 +78,8 @@ func AsyncWalk(path string) <-chan string {
 
 func main() {
 	runtime.GOMAXPROCS(2)
-	var nthreads = flag.Int("nthreads", 2, "number of threads")
-	var nworkers = flag.Int("nworkers", 0, "number of workers")
+	var nthreads = flag.Int("nthreads", 4, "number of threads")
+	var nworkers = flag.Int("nworkers", 2, "number of workers")
 	flag.Parse()
 
 	if *nworkers == 0 {
