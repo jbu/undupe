@@ -18,8 +18,11 @@
 
 (defn ^:dynamic sieve [primes xs]
   (if-let [prime (first xs)]
-    (sieve (conj primes prime) (remove #(zero? (mod % prime)) xs))
+    (recur (conj primes prime) (remove #(zero? (mod % prime)) xs))
     primes))
+
+(def ^:dynamic rsieve
+  (cons n (lsieve (inc n))))
 
 (defn -main
   [& args]
