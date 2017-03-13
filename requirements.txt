@@ -1,0 +1,6 @@
+numpy
+scipy
+py-applescript
+pyobjc
+scikit-learn
+exifread

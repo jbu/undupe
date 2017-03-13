@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"regexp"
 
 //	"bufio"
 //	"hash"
@@ -23,15 +24,18 @@ type fileHash struct {
 func ReadWorker(walkOut <-chan string, readOut chan<- *fileHash, readQuits chan<- bool) {
 	for s := range walkOut {
 		fd, er := os.Open(s)
-		fi, _ := fd.Stat()
-		flen := fi.Size()
+		if er != nil {
+			fmt.Println("=1=", er)
+                        continue
+		}
+		fi, er := fd.Stat()
 		if er != nil {
 			fmt.Println("=1=", er)
 		}
+		flen := fi.Size()
 		//r := bufio.NewReader(fd)
 		f := fileHash{path: s, sample: make([]byte, buflen)}
 		_, er2 := fd.Read(f.sample)
-		//fmt.Printf("read %s\n",s)
 		if er2 != nil && flen != 0{
 			fmt.Printf("=2= %d, %d, %v, %s\n", flen, len(f.sample), er2, s)
 		}
@@ -44,7 +48,6 @@ func ReadWorker(walkOut <-chan string, readOut chan<- *fileHash, readQuits chan<
 func HashWorker(readOut <-chan *fileHash, hashOut chan<- *fileHash, hashQuits chan<- bool) {
 	h := md5.New() // h is a hash.
 	for r := range readOut {
-		//fmt.Println("hash ",r.path)
 		h.Write(r.sample)
 		r.sample = nil //save space
 		r.hash = fmt.Sprintf("%x", h.Sum(nil))
@@ -57,14 +60,14 @@ func HashWorker(readOut <-chan *fileHash, hashOut chan<- *fileHash, hashQuits ch
 func AsyncWalk(path string) <-chan string {
 	p := make(chan string)
 	f := func(pth string, info os.FileInfo, err error) error {
-		if info.IsDir() {
-			return nil
-		}
         	if err != nil {
             		return err
         	}
+		if info.IsDir() {
+			return nil
+		}
 		p <- pth
-        	return nil
+        	return err
 	}
 	go func() {
     		err := filepath.Walk(path, f)
@@ -78,13 +81,19 @@ func AsyncWalk(path string) <-chan string {
 
 func main() {
 	runtime.GOMAXPROCS(2)
-	var nthreads = flag.Int("nthreads", 4, "number of threads")
-	var nworkers = flag.Int("nworkers", 2, "number of workers")
+	var nthreads int
+	var nworkers int
+	var targDirS string
+	flag.IntVar(&nthreads, "nthreads", 4, "number of threads")
+	flag.IntVar(&nworkers, "nworkers", 2, "number of workers")
+	flag.StringVar(&targDirS, "target", "", "target directory")
 	flag.Parse()
 
 	if *nworkers == 0 {
 		nworkers = nthreads
 	}
+
+ 	targDirRE := regexp.MustCompile(targDirS + ".*")
 
 	path := flag.Arg(0)
 	walkOut := AsyncWalk(path)
@@ -124,10 +133,16 @@ func main() {
 	m := make(map[string][]string)
 
 	for fh := range hashOut {
-		if _, ok := m[fh.hash]; ok {
-			m[fh.hash] = append(m[fh.hash], fh.path)
-		} else {
-			m[fh.hash] = []string{fh.path}
+		p := path.Clean(fh.path);
+		switch {
+		case len(m[fh.hash]) == 0:
+			m[fh.hash] = []string{p}
+		case targDirRE.MatchString(p):
+			m[fh.hash] = []string{p}
+		case targDirRE.MatchString(m[fh.hash][0]):
+			// do nothing
+		case true:
+			m[fh.hash] = append(m[fh.hash], p)
 		}
 	}
 
