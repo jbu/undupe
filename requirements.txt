@@ -1,6 +1,15 @@
 numpy
+pipe
 scipy
+pandas
 py-applescript
 pyobjc
-scikit-learn
+#scikit-learn
+scikit-image
 exifread
+rawkit
+pillow
+imagehash
+jupyter
+matplotlib
+
